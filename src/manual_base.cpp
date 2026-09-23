@@ -17,7 +17,7 @@ ManualBase::ManualBase(ros::NodeHandle& nh, ros::NodeHandle& nh_referee)
   actuator_state_sub_ =
       nh.subscribe<rm_msgs::ActuatorState>("/actuator_states", 10, &ManualBase::actuatorStateCallback, this);
   dbus_sub_ = nh.subscribe<rm_msgs::DbusData>(dbus_topic_, 10, &ManualBase::dbusDataCallback, this);
-  track_sub_ = nh.subscribe<rm_msgs::TrackData>("/track", 10, &ManualBase::trackCallback, this);
+  track_sub_ = nh.subscribe<rm_msgs::TrackData>("/sp_vision/track", 10, &ManualBase::trackCallback, this);
   gimbal_des_error_sub_ = nh.subscribe<rm_msgs::GimbalDesError>("/controllers/gimbal_controller/error", 10,
                                                                 &ManualBase::gimbalDesErrorCallback, this);
   odom_sub_ = nh.subscribe<nav_msgs::Odometry>("/odom", 10, &ManualBase::odomCallback, this);
@@ -86,7 +86,7 @@ void ManualBase::checkReferee()
   chassis_power_on_event_.update(chassis_output_on_);
   gimbal_power_on_event_.update(gimbal_output_on_);
   shooter_power_on_event_.update(shooter_output_on_);
-  referee_is_online_ = (ros::Time::now() - referee_last_get_stamp_ < ros::Duration(0.3));
+  referee_is_online_ = (ros::Time::now() - referee_last_get_stamp_ < ros::Duration(6.0));
   manual_to_referee_pub_.publish(manual_to_referee_pub_data_);
 }
 
