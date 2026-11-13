@@ -24,6 +24,9 @@ SeriesLeggedManual::SeriesLeggedManual(ros::NodeHandle& nh, ros::NodeHandle& nh_
   legCommandSender_->setLgeLength(leg_len_map_[leg_len_status_]);
   legCommandSender_->setJump(false);
 
+  // left_switch_up_event_.setActiveHigh({});
+  // left_switch_up_event_.setFalling({});
+  // left_switch_mid_event_.setActiveHigh({});
   b_event_.setEdge(boost::bind(&SeriesLeggedManual::bPress, this), boost::bind(&SeriesLeggedManual::bRelease, this));
   b_event_.setActiveHigh(boost::bind(&SeriesLeggedManual::bPressing, this));
   r_event_.setEdge(boost::bind(&SeriesLeggedManual::rPress, this), boost::bind(&SeriesLeggedManual::rRelease, this));
@@ -63,6 +66,15 @@ SeriesLeggedManual::SeriesLeggedManual(ros::NodeHandle& nh, ros::NodeHandle& nh_
 
 void SeriesLeggedManual::sendCommand(const ros::Time& time)
 {
+  const auto& gimbal_cmd = *gimbal_cmd_sender_->getMsg();
+  const bool owns_x_traj = gimbal_cmd.mode == rm_msgs::GimbalCmd::TRAJ && gimbal_cmd.traj_frame_id == "base_link" &&
+                           gimbal_cmd.traj_yaw == x_turn_yaw_ && gimbal_cmd.traj_pitch == x_turn_pitch_;
+  if (x_turning_ && (state_ != PC || chassis_cmd_sender_->getMsg()->mode != rm_msgs::ChassisCmd::FOLLOW || !owns_x_traj))
+  {
+    x_turning_ = false;
+    if (owns_x_traj)
+      gimbal_cmd_sender_->setMode(rm_msgs::GimbalCmd::RATE);
+  }
   if (chassis_cmd_sender_->getMsg()->mode == rm_msgs::ChassisCmd::FOLLOW)
   {
     double roll{}, pitch{}, yaw_normal{}, yaw_reverse{};
@@ -73,22 +85,18 @@ void SeriesLeggedManual::sendCommand(const ros::Time& time)
       quatToRPY(tf_buffer_.lookupTransform("base_link", reverse_frame_, ros::Time(0)).transform.rotation, roll, pitch,
                 yaw_reverse);
 
-      if ((time - xPress_time_).toSec() > 3.0f && (time - ctrlXPress_time_).toSec() > 3.0f)
+      constexpr double turn_tolerance = 10.0 * M_PI / 180.0;
+      const bool turn_finished =
+          x_turning_ && std::abs(angles::shortest_angular_distance(yaw_normal, x_turn_yaw_)) < turn_tolerance;
+      if (turn_finished)
       {
-        if (std::abs(yaw_reverse) < std::abs(yaw_normal))
-        {
-          if (!reverse_)
-          {
-            reverse_ = true;
-          }
-        }
-        else
-        {
-          if (reverse_)
-          {
-            reverse_ = false;
-          }
-        }
+        x_turning_ = false;
+        gimbal_cmd_sender_->setMode(rm_msgs::GimbalCmd::RATE);
+      }
+      if (turn_finished ||
+          (!x_turning_ && (time - xPress_time_).toSec() > 3.0f && (time - ctrlXPress_time_).toSec() > 3.0f))
+      {
+        reverse_ = std::abs(yaw_reverse) < std::abs(yaw_normal);
       }
     }
     catch (tf2::TransformException& ex)
@@ -96,7 +104,22 @@ void SeriesLeggedManual::sendCommand(const ros::Time& time)
       ROS_WARN_ONCE("%s", ex.what());
     }
   }
-  BalanceManual::sendCommand(time);
+  if (x_turning_)
+  {
+    // Keep FOLLOW balancing, but suspend chassis yaw tracking for the whole turn.
+    chassis_cmd_sender_->getMsg()->follow_source_frame = "base_link";
+    chassis_cmd_sender_->setFollowVelDes(0.0);
+    cover_close_ = !supply_;
+    if (supply_)
+      cover_command_sender_->on();
+    else
+      cover_command_sender_->off();
+    // BalanceManual::sendCommand would overwrite follow_source_frame.
+    ChassisGimbalShooterManual::sendCommand(time);
+    cover_command_sender_->sendCommand(time);
+  }
+  else
+    BalanceManual::sendCommand(time);
   if (jump_up_flag_)
   {
     if (total_tof_len_ < jump_up_range_threshold_)
@@ -116,8 +139,32 @@ void SeriesLeggedManual::sendCommand(const ros::Time& time)
 
 void SeriesLeggedManual::xPress()
 {
+  if (x_turning_ || chassis_cmd_sender_->getMsg()->mode != rm_msgs::ChassisCmd::FOLLOW)
+    return;
+
+  double roll{}, pitch{}, yaw{};
+  try
+  {
+    quatToRPY(tf_buffer_.lookupTransform("base_link", "yaw", ros::Time(0)).transform.rotation, roll, pitch, yaw);
+  }
+  catch (tf2::TransformException& ex)
+  {
+    ROS_WARN("%s", ex.what());
+    return;
+  }
+  x_turn_yaw_ = yaw + M_PI;
+  x_turn_pitch_ = pitch;
+  gimbal_cmd_sender_->setGimbalTrajFrameId("base_link");
+  gimbal_cmd_sender_->setGimbalTraj(x_turn_yaw_, x_turn_pitch_);
+  gimbal_cmd_sender_->setMode(rm_msgs::GimbalCmd::TRAJ);
+  flank_ = false;
+  x_turning_ = true;
   xPress_time_ = ros::Time::now();
-  BalanceManual::xPress();
+}
+
+void SeriesLeggedManual::xRelease()
+{
+  // A single press completes the turn; releasing X must not cancel TRAJ.
 }
 
 void SeriesLeggedManual::checkKeyboard(const rm_msgs::DbusData::ConstPtr& dbus_data)
@@ -291,6 +338,11 @@ void SeriesLeggedManual::leggedChassisModeCallback(const rm_msgs::LeggedChassisM
   static bool trigger_gimbal_traj_flag = true;
   if (msg->mode != rm_msgs::LeggedChassisMode::NORMAL && !debug_gimbal_flag_)
   {
+    if (x_turning_)
+    {
+      x_turning_ = false;
+      gimbal_cmd_sender_->setMode(rm_msgs::GimbalCmd::RATE);
+    }
     double roll{}, pitch{}, yaw{};
     try
     {
@@ -363,22 +415,36 @@ void SeriesLeggedManual::tofSensorMsgCallback(const sensor_msgs::RangeConstPtr& 
 void SeriesLeggedManual::leftSwitchUpRise()
 {
   // BalanceManual::leftSwitchUpRise();
+  ChassisGimbalShooterManual::leftSwitchUpRise();
   
-  //  legCommandSender_->setJump(false);
-  //  upstair_leg_len_fsm_ = 1;
-  //  setLegLenStatus(HIGH);
+  // legCommandSender_->setJump(false);
+  // upstair_leg_len_fsm_ = 1;
+  // setLegLenStatus(HIGH);
+
+  // BalanceManual::leftSwitchDownRise();
+
+  // ChassisGimbalManual::leftSwitchUpRise();
+  // gimbal_cmd_sender_->setMode(rm_msgs::GimbalCmd::TRACK);
+  // last_shoot_freq_ = shooter_cmd_sender_->getShootFrequency();
 
   // <unused>
-   legCommandSender_->setJump(true);
-  return;
+  // legCommandSender_->setJump(true);
+  // return;
 }
 
 void SeriesLeggedManual::leftSwitchMidRise()
 {
   // BalanceManual::leftSwitchMidRise();
-   legCommandSender_->setJump(false);
-   upstair_leg_len_fsm_ = 0;
-   setLegLenStatus(MID);
+  ChassisGimbalShooterManual::leftSwitchMidRise();
+
+  // legCommandSender_->setJump(false);
+  // upstair_leg_len_fsm_ = 0;
+  // setLegLenStatus(MID);
+
+  // BalanceManual::leftSwitchDownRise();
+
+  // ChassisGimbalManual::leftSwitchMidRise();
+  // shooter_cmd_sender_->setMode(rm_msgs::ShootCmd::READY);
 
   //  legCommandSender_->setJump(false);
   //  upstair_leg_len_fsm_ = 0;
@@ -390,10 +456,16 @@ void SeriesLeggedManual::leftSwitchMidRise()
 
 void SeriesLeggedManual::leftSwitchDownRise()
 {
-  BalanceManual::leftSwitchDownRise();
-  legCommandSender_->setJump(false);
-  upstair_leg_len_fsm_ = 0;
-  setLegLenStatus(SHORT);
+  //  BalanceManual::leftSwitchDownRise();
+  ChassisGimbalShooterManual::leftSwitchDownRise();
+
+  //  legCommandSender_->setJump(false);
+  //  upstair_leg_len_fsm_ = 0;
+  //  setLegLenStatus(SHORT);
+
+  // ChassisGimbalManual::leftSwitchDownRise();
+  // gimbal_cmd_sender_->setMode(rm_msgs::GimbalCmd::RATE);
+  // shooter_cmd_sender_->setMode(rm_msgs::ShootCmd::STOP);
 
   //  legCommandSender_->setJump(false);
   //  upstair_leg_len_fsm_ = 0;
@@ -418,6 +490,11 @@ void SeriesLeggedManual::zPress()
 
 void SeriesLeggedManual::ctrlXPress()
 {
+  if (x_turning_)
+  {
+    x_turning_ = false;
+    gimbal_cmd_sender_->setMode(rm_msgs::GimbalCmd::RATE);
+  }
   ctrlXPress_time_ = ros::Time::now();
   reverse_ = !reverse_;
 }

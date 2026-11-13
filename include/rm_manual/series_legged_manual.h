@@ -68,6 +68,7 @@ protected:
   void enterSitDown();
   void exitSitDown();
   void xPress() override;
+  void xRelease() override;
   void reviveMotorOnlineCallback(const rm_ecat_msgs::RmEcatStandardSlaveReadingsConstPtr& msg);
   rm_common::LegCommandSender* legCommandSender_{};
 
@@ -80,6 +81,8 @@ private:
     LEG_RETRACTION,
   };
   ros::Time xPress_time_{}, ctrlXPress_time_{};
+  bool x_turning_{ false };
+  double x_turn_yaw_{}, x_turn_pitch_{};
   double jump_up_range_threshold_{ 0.8 };
   bool stretch_ = false, stretching_ = false, is_increasing_length_ = false;
   bool is_die_flag_{ false }, sit_down_flag_{ false };
