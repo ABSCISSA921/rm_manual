@@ -415,11 +415,11 @@ void SeriesLeggedManual::tofSensorMsgCallback(const sensor_msgs::RangeConstPtr& 
 void SeriesLeggedManual::leftSwitchUpRise()
 {
   // BalanceManual::leftSwitchUpRise();
-  ChassisGimbalShooterManual::leftSwitchUpRise();
+  // ChassisGimbalShooterManual::leftSwitchUpRise();
   
-  // legCommandSender_->setJump(false);
-  // upstair_leg_len_fsm_ = 1;
-  // setLegLenStatus(HIGH);
+  legCommandSender_->setJump(false);
+  upstair_leg_len_fsm_ = 1;
+  setLegLenStatus(HIGH);
 
   // BalanceManual::leftSwitchDownRise();
 
@@ -435,11 +435,11 @@ void SeriesLeggedManual::leftSwitchUpRise()
 void SeriesLeggedManual::leftSwitchMidRise()
 {
   // BalanceManual::leftSwitchMidRise();
-  ChassisGimbalShooterManual::leftSwitchMidRise();
+  // ChassisGimbalShooterManual::leftSwitchMidRise();
 
-  // legCommandSender_->setJump(false);
-  // upstair_leg_len_fsm_ = 0;
-  // setLegLenStatus(MID);
+  legCommandSender_->setJump(false);
+  upstair_leg_len_fsm_ = 0;
+  setLegLenStatus(MID);
 
   // BalanceManual::leftSwitchDownRise();
 
@@ -457,11 +457,11 @@ void SeriesLeggedManual::leftSwitchMidRise()
 void SeriesLeggedManual::leftSwitchDownRise()
 {
   //  BalanceManual::leftSwitchDownRise();
-  ChassisGimbalShooterManual::leftSwitchDownRise();
+  // ChassisGimbalShooterManual::leftSwitchDownRise();
 
-  //  legCommandSender_->setJump(false);
-  //  upstair_leg_len_fsm_ = 0;
-  //  setLegLenStatus(SHORT);
+   legCommandSender_->setJump(false);
+   upstair_leg_len_fsm_ = 0;
+   setLegLenStatus(SHORT);
 
   // ChassisGimbalManual::leftSwitchDownRise();
   // gimbal_cmd_sender_->setMode(rm_msgs::GimbalCmd::RATE);
